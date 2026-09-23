@@ -63,6 +63,19 @@ img { max-width: 100%; }
 /* ---------- grids ---------- */
 #view { padding: 22px; max-width: 1500px; margin: 0 auto; }
 h1 { font-size: 20px; margin: 4px 0 16px; }
+.crumbs {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  color: var(--dim);
+  margin-bottom: 14px;
+}
+.crumbs a { color: var(--accent2); text-decoration: none; cursor: pointer; }
+.crumbs a:hover { text-decoration: underline; }
+.crumbs .sep { opacity: 0.5; }
+.crumbs .here { color: var(--text); }
 h2 { font-size: 17px; margin: 24px 0 10px; color: var(--dim); font-weight: 600; }
 .grid {
   display: grid;
@@ -146,6 +159,42 @@ h2 { font-size: 17px; margin: 24px 0 10px; color: var(--dim); font-weight: 600; 
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.55);
   flex-shrink: 0;
 }
+/* cover flip: hover rotates the card 180° to show the rating on the back */
+#detail .flip {
+  width: 150px;
+  perspective: 900px;
+  flex-shrink: 0;
+}
+#detail .flip-inner {
+  position: relative;
+  transform-style: preserve-3d;
+  transition: transform 0.6s cubic-bezier(0.4, 0.2, 0.2, 1);
+}
+#detail .flip:hover .flip-inner { transform: rotateY(180deg); }
+#detail .flip-front,
+#detail .flip-back { backface-visibility: hidden; -webkit-backface-visibility: hidden; }
+#detail .flip-back {
+  position: absolute;
+  inset: 0;
+  transform: rotateY(180deg);
+  border-radius: var(--radius);
+  background: linear-gradient(160deg, #1a2230, #10151f);
+  border: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-align: center;
+  padding: 10px;
+}
+#detail .flip-back .score {
+  font-size: 30px;
+  font-weight: 800;
+  color: #ffd166;
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.5);
+}
+#detail .flip-back .follows { font-size: 12px; color: var(--dim); }
 #detail .info { flex: 1; min-width: 0; }
 #detail h1 {
   margin: 0 0 8px;

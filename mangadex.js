@@ -241,7 +241,24 @@ async function manga(id) {
     'includes[]': ['cover_art', 'author', 'artist'],
   });
   const out = slimManga(j.data);
+  // community rating (hover-flip on the cover shows it); a stats failure
+  // must never take the detail page down
+  try { out.rating = await statistics(id); } catch { out.rating = null; }
   cachePut('manga', id, out);
+  return out;
+}
+
+// community rating + follow count from /statistics/manga/{id}
+async function statistics(id) {
+  const cached = cacheGet('stats', id, 30 * 60 * 1000);
+  if (cached) return cached;
+  const j = await req(`/statistics/manga/${id}`);
+  const s = j.statistics && j.statistics[id];
+  const out = {
+    average: (s && s.rating && s.rating.average) || null,
+    follows: (s && s.follows) || 0,
+  };
+  cachePut('stats', id, out);
   return out;
 }
 
@@ -327,6 +344,7 @@ module.exports = {
   searchManga,
   listManga,
   manga,
+  statistics,
   mangaFeed,
   latestChapters,
   atHome,

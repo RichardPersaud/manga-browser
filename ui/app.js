@@ -88,6 +88,36 @@ async function api(path) {
   return j;
 }
 
+// ---------- breadcrumbs ----------
+// trail of where the user is; refreshed by every list view so a detail page
+// can show how you got there (Discover › Action › Some Manga)
+let lastCrumbs = [{ label: 'Discover', hash: '#/discover' }];
+function renderCrumbs(trail) {
+  if (!trail || trail.length < 2) return;
+  const bar = document.createElement('nav');
+  bar.className = 'crumbs';
+  trail.forEach((c, i) => {
+    if (i) {
+      const sep = document.createElement('span');
+      sep.className = 'sep';
+      sep.textContent = '›';
+      bar.appendChild(sep);
+    }
+    if (i < trail.length - 1 && c.hash) {
+      const a = document.createElement('a');
+      a.href = c.hash;
+      a.textContent = c.label;
+      bar.appendChild(a);
+    } else {
+      const s = document.createElement('span');
+      s.className = 'here';
+      s.textContent = c.label;
+      bar.appendChild(s);
+    }
+  });
+  view.prepend(bar);
+}
+
 // ---------- routing ----------
 const routes = {
   library: renderLibrary,
@@ -95,6 +125,7 @@ const routes = {
   latest: renderLatest,
   manga: renderManga,
   tag: renderTag,
+  search: renderSearch,
 };
 
 // browse everything in one category (tag)
@@ -103,8 +134,9 @@ async function renderTag(tagId, encodedName) {
   view.innerHTML = `<h1>${name}</h1><div class="spin"></div>`;
   const { results } = await api(`/api/discover?order=followedCount&tag=${encodeURIComponent(tagId)}&limit=36`);
   view.querySelectorAll('.spin').forEach((el) => el.remove());
-  if (!results.length) { view.innerHTML += '<div class="empty">Nothing found in this category.</div>'; return; }
+  if (!results.length) { view.innerHTML += '<div class="empty">Nothing found in this category.</div>'; renderCrumbs(lastCrumbs); return; }
   view.appendChild(grid(results));
+  renderCrumbs(lastCrumbs);
 }
 function nav(to) { location.hash = to; }
 window.addEventListener('hashchange', render);
@@ -121,9 +153,19 @@ async function render() {
     btn.classList.toggle('active', btn.dataset.nav === name);
   }
   $('#searchform').style.display = name === 'library' ? 'none' : '';
+  // remember the trail so detail pages can breadcrumb back to their source
+  if (name === 'latest') lastCrumbs = [{ label: 'Latest', hash: '#/latest' }];
+  else if (name === 'library') lastCrumbs = [{ label: 'Library', hash: '#/library' }];
+  else if (name === 'tag' && a) {
+    const tn = decodeURIComponent(b || 'Category');
+    lastCrumbs = [{ label: 'Discover', hash: '#/discover' }, { label: tn, hash: `#/tag/${a}/${b}` }];
+  } else if (name === 'search' && a) {
+    lastCrumbs = [{ label: 'Discover', hash: '#/discover' }, { label: `Search: “${decodeURIComponent(a)}”`, hash: `#/search/${a}` }];
+  } else if (name === 'discover') lastCrumbs = [{ label: 'Discover', hash: '#/discover' }];
   try {
     if (name === 'manga' && a) await routes.manga(a);
     else if (name === 'tag' && a) await routes.tag(a, b);
+    else if (name === 'search' && a) await routes.search(decodeURIComponent(a));
     else if (routes[name]) await routes[name]();
     else await routes.discover();
   } catch (e) {
@@ -222,17 +264,14 @@ async function renderDiscover() {
   view.appendChild(g);
 }
 
-// search
-$('#searchform').onsubmit = async (e) => {
-  e.preventDefault();
-  const qv = $('#searchbox').value.trim();
-  if (!qv) return;
-  location.hash = '/discover';
+// search (a real hash route, so Back works and the breadcrumb is clickable)
+async function renderSearch(qv) {
+  document.title = `MangaNinja — Search: ${qv}`;
   view.innerHTML = `<h1>Search: “${qv.replace(/</g, '&lt;')}”</h1><div class="spin"></div>`;
   try {
     const { results } = await api(`/api/search?q=${encodeURIComponent(qv)}&limit=36`);
     view.querySelectorAll('.spin').forEach((el) => el.remove());
-    if (!results.length) { view.innerHTML += '<div class="empty">No results.</div>'; return; }
+    if (!results.length) { view.innerHTML += '<div class="empty">No results.</div>'; renderCrumbs(lastCrumbs); return; }
     const g = document.createElement('div');
     g.className = 'grid';
     for (const m of results) g.appendChild(mangaCard(m));
@@ -241,6 +280,13 @@ $('#searchform').onsubmit = async (e) => {
     view.querySelectorAll('.spin').forEach((el) => el.remove());
     view.innerHTML += `<div class="error">${err.message || err}</div>`;
   }
+  renderCrumbs(lastCrumbs);
+}
+$('#searchform').onsubmit = (e) => {
+  e.preventDefault();
+  const qv = $('#searchbox').value.trim();
+  if (!qv) return;
+  nav(`/search/${encodeURIComponent(qv)}`);
 };
 
 // ---------- Latest ----------
@@ -332,7 +378,31 @@ async function renderManga(id) {
 
   // background-image can't retry onerror — must go through the proxy too
   $('#detailwrap .backdrop').style.backgroundImage = `url("${proxiedUrl(m.coverFull || m.cover)}")`;
-  $('#coverbox').appendChild(img(m.coverFull || m.cover, m.title, false, 'cover'));
+
+  // cover flips on hover to reveal the community rating
+  const flip = document.createElement('div');
+  flip.className = 'flip';
+  flip.title = 'Community rating';
+  const inner = document.createElement('div');
+  inner.className = 'flip-inner';
+  const front = document.createElement('div');
+  front.className = 'flip-front';
+  front.appendChild(img(m.coverFull || m.cover, m.title, false, 'cover'));
+  const back = document.createElement('div');
+  back.className = 'flip-back';
+  const rt = m.rating || {};
+  const score = document.createElement('div');
+  score.className = 'score';
+  score.textContent = rt.average != null ? `★ ${rt.average.toFixed(2)}` : '★ —';
+  const follows = document.createElement('div');
+  follows.className = 'follows';
+  follows.textContent = rt.follows ? `${rt.follows.toLocaleString()} followers` : 'No rating yet';
+  back.appendChild(score);
+  back.appendChild(follows);
+  inner.appendChild(front);
+  inner.appendChild(back);
+  flip.appendChild(inner);
+  $('#coverbox').appendChild(flip);
 
   // clickable tags -> browse that category
   for (const btn of document.querySelectorAll('#detail .tags button')) {
@@ -437,6 +507,7 @@ async function renderManga(id) {
     row.appendChild(when);
     list.appendChild(row);
   }
+  renderCrumbs(lastCrumbs.concat([{ label: m.title }]));
 }
 
 // ---------- Reader ----------
