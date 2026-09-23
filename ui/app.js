@@ -1,0 +1,556 @@
+'use strict';
+/* MangaNinja UI — vanilla JS SPA over the local server. Same-origin /api/*
+   calls only; images go straight to MangaDex with an onerror retry through
+   the /img proxy (some environments block direct hotlinking). */
+
+// ---------- storage ----------
+const KEYS = ['mr_library', 'mr_progress', 'mr_read', 'mr_prefs'];
+function load(key) {
+  try { return JSON.parse(localStorage.getItem(key)) || {}; }
+  catch { return {}; }
+}
+function save(key, obj) {
+  try { localStorage.setItem(key, JSON.stringify(obj)); } catch { /* quota */ }
+  scheduleBackup();
+}
+let library = load('mr_library');   // {id: {title, cover, ts, seenAt}}
+let progress = load('mr_progress'); // {mangaId: {chapterId, chapter, page, ts}}
+let readMap = load('mr_read');      // {mangaId: {chapterId: ts}}
+let prefs = Object.assign({ quality: 'data-saver' }, load('mr_prefs'));
+
+// ---------- durable backup (mirrors AniNinja's debounced design) ----------
+let backupTimer = null;
+function scheduleBackup() {
+  clearTimeout(backupTimer);
+  backupTimer = setTimeout(sendBackup, 1500);
+}
+function backupPayload() {
+  return {
+    prefs, library, progress, read: readMap,
+  };
+}
+function sendBackup() {
+  fetch('/api/backup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(backupPayload()),
+  }).catch(() => {});
+}
+window.addEventListener('beforeunload', () => {
+  // last-chance sync: keepAlive beacon survives navigation
+  const blob = new Blob([JSON.stringify(backupPayload())], { type: 'application/json' });
+  navigator.sendBeacon('/api/backup', blob);
+});
+
+// ---------- tiny helpers ----------
+const $ = (sel) => document.querySelector(sel);
+const view = $('#view');
+function toast(msg, ms = 2600) {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.hidden = false;
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => { t.hidden = true; }, ms);
+}
+function fmtWhen(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const diff = Date.now() - d.getTime();
+  if (diff < 60 * 1000) return 'just now';
+  if (diff < 3600 * 1000) return Math.floor(diff / 60000) + 'm ago';
+  if (diff < 86400 * 1000) return Math.floor(diff / 3600000) + 'h ago';
+  if (diff < 7 * 86400 * 1000) return Math.floor(diff / 86400000) + 'd ago';
+  return d.toISOString().slice(0, 10);
+}
+// images: MangaDex hosts replace hotlinked images with a placeholder (a valid
+// 200 response, so onerror never fires) — route every MangaDex image through
+// our /img proxy from the start; the server sends the proper User-Agent
+function img(src, alt, lazy = true) {
+  if (!src) return '';
+  const el = new Image();
+  if (lazy) el.loading = 'lazy';
+  el.alt = alt || '';
+  if (/mangadex\.(org|network)/.test(src)) {
+    // base64url-safe encoding (plain base64's + and / would corrupt the query)
+    const b64 = btoa(unescape(encodeURIComponent(src))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    el.src = '/img?u=' + b64;
+  } else {
+    el.src = src;
+  }
+  return el;
+}
+
+async function api(path) {
+  const res = await fetch(path, { signal: AbortSignal.timeout(60000) });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`);
+  return j;
+}
+
+// ---------- routing ----------
+const routes = {
+  library: renderLibrary,
+  discover: renderDiscover,
+  latest: renderLatest,
+  manga: renderManga,
+};
+function nav(to) { location.hash = to; }
+window.addEventListener('hashchange', render);
+function parseHash() {
+  const h = location.hash.replace(/^#\//, '');
+  const [name, a, b] = h.split('/');
+  return { name: name || 'discover', a, b };
+}
+
+async function render() {
+  if (!$('#reader').hidden) return; // reader overlay owns the screen
+  const { name, a } = parseHash();
+  for (const btn of document.querySelectorAll('#nav button')) {
+    btn.classList.toggle('active', btn.dataset.nav === name);
+  }
+  $('#searchform').style.display = name === 'library' ? 'none' : '';
+  try {
+    if (name === 'manga' && a) await routes.manga(a);
+    else if (routes[name]) await routes[name]();
+    else await routes.discover();
+  } catch (e) {
+    view.innerHTML = `<div class="error">Failed to load: ${e.message || e}</div>`;
+  }
+}
+
+// ---------- shared renderers ----------
+function mangaCard(m, extra) {
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.onclick = () => nav(`/manga/${m.id}`);
+  card.appendChild(img(m.cover, m.title));
+  const meta = document.createElement('div');
+  meta.className = 'meta';
+  const t = document.createElement('div');
+  t.className = 'title';
+  t.textContent = m.title;
+  meta.appendChild(t);
+  const sub = document.createElement('div');
+  sub.className = 'sub';
+  sub.textContent = extra || m.status || '';
+  meta.appendChild(sub);
+  card.appendChild(meta);
+  return card;
+}
+function grid(items, mkExtra) {
+  const g = document.createElement('div');
+  g.className = 'grid';
+  for (const it of items) g.appendChild(mangaCard(it, mkExtra && mkExtra(it)));
+  return g;
+}
+
+// ---------- Library ----------
+async function renderLibrary() {
+  document.title = 'MangaNinja — Library';
+  const ids = Object.entries(library).sort((x, y) => (y[1].ts || 0) - (x[1].ts || 0));
+  if (!ids.length) {
+    view.innerHTML = `<h1>Library</h1><div class="empty">Nothing saved yet — find something in Discover and hit “+ Library”.</div>`;
+    return;
+  }
+  view.innerHTML = `<h1>Library <span class="sub" style="font-size:13px;color:var(--dim)">${ids.length} titles</span></h1>`;
+  const g = document.createElement('div');
+  g.className = 'grid';
+  for (const [id, entry] of ids) {
+    if (!entry.inLib) continue; // entries only exist for explicitly-added manga
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.onclick = () => nav(`/manga/${id}`);
+    card.appendChild(img(entry.cover, entry.title));
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    const t = document.createElement('div');
+    t.className = 'title';
+    t.textContent = entry.title;
+    meta.appendChild(t);
+    // new-chapter badge: the catalog told us when the latest upload landed
+    if (entry.latestAt && entry.seenAt && entry.latestAt > entry.seenAt) {
+      const b = document.createElement('span');
+      b.className = 'badge';
+      b.textContent = 'NEW';
+      t.appendChild(b);
+    }
+    const sub = document.createElement('div');
+    sub.className = 'sub';
+    const pr = progress[id];
+    sub.textContent = pr ? `Resume ch ${pr.chapter || '?'}` : (entry.status || '');
+    meta.appendChild(sub);
+    card.appendChild(meta);
+    g.appendChild(card);
+  }
+  view.appendChild(g);
+}
+
+// ---------- Discover ----------
+let discoverTab = 'popular';
+async function renderDiscover() {
+  const q = new URLSearchParams((location.hash.split('?')[1] || ''));
+  discoverTab = q.get('tab') === 'latest' ? 'latest' : discoverTab;
+  const order = discoverTab === 'latest' ? 'latestUploadedChapter' : 'followedCount';
+  view.innerHTML = `
+    <div style="display:flex;gap:10px;align-items:center;margin-bottom:16px">
+      <h1 style="margin:0">Discover</h1>
+      <button id="tab-popular">Popular</button>
+      <button id="tab-latest">Latest updates</button>
+    </div>
+    <div class="spin"></div>`;
+  const pop = $('#tab-popular'), lat = $('#tab-latest');
+  pop.classList.toggle('active', discoverTab === 'popular');
+  lat.classList.toggle('active', discoverTab === 'latest');
+  pop.onclick = () => { discoverTab = 'popular'; nav('/discover?tab=popular'); render(); };
+  lat.onclick = () => { discoverTab = 'latest'; nav('/discover?tab=latest'); render(); };
+  const { results } = await api(`/api/discover?order=${order}&limit=36`);
+  view.querySelectorAll('.spin').forEach((el) => el.remove());
+  const g = grid(results, (m) => discoverTab === 'latest' && m.latestUploadedAt ? fmtWhen(m.latestUploadedAt) : '');
+  view.appendChild(g);
+}
+
+// search
+$('#searchform').onsubmit = async (e) => {
+  e.preventDefault();
+  const qv = $('#searchbox').value.trim();
+  if (!qv) return;
+  location.hash = '/discover';
+  view.innerHTML = `<h1>Search: “${qv.replace(/</g, '&lt;')}”</h1><div class="spin"></div>`;
+  try {
+    const { results } = await api(`/api/search?q=${encodeURIComponent(qv)}&limit=36`);
+    view.querySelectorAll('.spin').forEach((el) => el.remove());
+    if (!results.length) { view.innerHTML += '<div class="empty">No results.</div>'; return; }
+    const g = document.createElement('div');
+    g.className = 'grid';
+    for (const m of results) g.appendChild(mangaCard(m));
+    view.appendChild(g);
+  } catch (err) {
+    view.querySelectorAll('.spin').forEach((el) => el.remove());
+    view.innerHTML += `<div class="error">${err.message || err}</div>`;
+  }
+};
+
+// ---------- Latest ----------
+async function renderLatest() {
+  view.innerHTML = `<h1>Latest chapters</h1><div class="spin"></div>`;
+  const { chapters } = await api('/api/latest?limit=40');
+  view.querySelectorAll('.spin').forEach((el) => el.remove());
+  if (!chapters.length) { view.innerHTML += '<div class="empty">Nothing readable right now.</div>'; return; }
+  const list = document.createElement('div');
+  list.className = 'chapters';
+  const lastSeen = Number(localStorage.getItem('mr_lastseen')) || 0;
+  for (const c of chapters) {
+    const row = document.createElement('div');
+    row.className = 'chrow';
+    row.onclick = () => openReader(c.mangaId, c.id);
+    const no = document.createElement('div');
+    no.className = 'no';
+    no.textContent = c.chapter ? `Ch ${c.chapter}` : 'Oneshot';
+    row.appendChild(no);
+    const t = document.createElement('div');
+    t.className = 't';
+    t.textContent = c.mangaTitle + (c.title ? ` — ${c.title}` : '');
+    if (c.publishAt && new Date(c.publishAt).getTime() > lastSeen) {
+      const b = document.createElement('span');
+      b.className = 'badge';
+      b.textContent = 'NEW';
+      t.appendChild(b);
+    }
+    row.appendChild(t);
+    const grp = document.createElement('div');
+    grp.className = 'grp';
+    grp.textContent = c.group || '';
+    row.appendChild(grp);
+    const when = document.createElement('div');
+    when.className = 'date';
+    when.textContent = fmtWhen(c.readableAt);
+    row.appendChild(when);
+    list.appendChild(row);
+  }
+  view.appendChild(list);
+  // remember "now" as seen for next visit
+  localStorage.setItem('mr_lastseen', String(Date.now()));
+}
+
+// ---------- Manga detail ----------
+async function renderManga(id) {
+  view.innerHTML = `<div class="spin"></div>`;
+  const [{ manga: m }, { chapters }] = await Promise.all([
+    api(`/api/manga/${id}`),
+    api(`/api/manga/${id}/feed`),
+  ]);
+  // library bookkeeping: only entries the user explicitly added live here;
+  // opening a detail page just refreshes an existing entry (seenAt = now)
+  if (library[id]) {
+    const entry = library[id];
+    entry.title = m.title;
+    entry.cover = m.cover;
+    entry.latestAt = m.latestUploadedAt ? new Date(m.latestUploadedAt).getTime() : entry.latestAt;
+    entry.seenAt = Date.now();
+    save('mr_library', library);
+  }
+
+  const statusText = [m.status, m.year, m.lastChapter ? `${m.lastChapter} chs` : ''].filter(Boolean).join(' · ');
+  view.innerHTML = `
+    <div id="detail">
+      <div id="coverbox"></div>
+      <div class="info">
+        <h1>${m.title.replace(/</g, '&lt;')}</h1>
+        <div class="sub">${statusText}${m.author ? ` · ${m.author.replace(/</g, '&lt;')}` : ''}</div>
+        <div class="tags">${m.tags.map((t) => `<span>${t.replace(/</g, '&lt;')}</span>`).join('')}</div>
+        <div class="desc">${(m.description || '').replace(/</g, '&lt;')}</div>
+        <div class="actions">
+          <button id="librarybtn">+ Library</button>
+          <button id="resumeBtn" hidden>Resume reading</button>
+        </div>
+      </div>
+    </div>
+    <h2>Chapters (${chapters.length})</h2>
+    <div class="chapters" id="chlist"></div>`;
+
+  $('#coverbox').appendChild(img(m.coverFull || m.cover, m.title, false));
+
+  const libBtn = $('#librarybtn');
+  const isInNow = () => !!library[id] && !!library[id].inLib;
+  libBtn.textContent = isInNow() ? '✓ In library' : '+ Library';
+  libBtn.classList.toggle('inlibrary', isInNow());
+  libBtn.onclick = () => {
+    if (isInNow()) {
+      delete library[id].inLib;
+      toast('Removed from library');
+    } else {
+      library[id] = library[id] || { title: m.title, cover: m.cover };
+      library[id].inLib = true;
+      library[id].ts = Date.now();
+      library[id].latestAt = m.latestUploadedAt ? new Date(m.latestUploadedAt).getTime() : library[id].latestAt;
+      library[id].seenAt = Date.now();
+      toast('Added to library');
+    }
+    libBtn.textContent = isInNow() ? '✓ In library' : '+ Library';
+    libBtn.classList.toggle('inlibrary', isInNow());
+    save('mr_library', library);
+  };
+
+  const pr = progress[id];
+  if (pr && pr.chapterId) {
+    const btn = $('#resumeBtn');
+    btn.hidden = false;
+    btn.textContent = `Resume ch ${pr.chapter || '?'}`;
+    btn.onclick = () => openReader(id, pr.chapterId);
+  }
+
+  const list = $('#chlist');
+  const readSet = readMap[id] || {};
+  for (const c of chapters) {
+    const row = document.createElement('div');
+    row.className = 'chrow' + (readSet[c.id] ? ' read' : '');
+    if (c.isUnavailable) {
+      row.style.opacity = '0.4';
+      row.style.cursor = 'default';
+      row.title = 'Chapter unavailable';
+    } else if (c.externalUrl) {
+      // hosted off MangaDex (official/licensed) — two deliberate clicks, never
+      // one, so a stray click can't fling you at an external site
+      const t2 = document.createElement('span');
+      t2.className = 'grp';
+      t2.style.color = 'var(--accent2)';
+      t2.textContent = '↗ external';
+      row.appendChild(t2);
+      row.title = 'Hosted off MangaDex — click twice to open the publisher page';
+      let armed = 0;
+      row.onclick = () => {
+        const now = Date.now();
+        if (now - armed < 5000) {
+          window.open(c.externalUrl, '_blank');
+        } else {
+          armed = now;
+          toast('Opens the publisher site — click again within 5s to confirm');
+        }
+      };
+    } else if (!c.pages) {
+      row.style.opacity = '0.4';
+      row.style.cursor = 'default';
+      row.title = 'No pages';
+    } else {
+      row.onclick = () => openReader(id, c.id);
+    }
+    if (pr && pr.chapterId === c.id) {
+      const cur = document.createElement('span');
+      cur.className = 'current';
+      cur.textContent = '●';
+      cur.title = 'Last read';
+      row.prepend(cur);
+    }
+    const no = document.createElement('div');
+    no.className = 'no';
+    no.textContent = c.chapter ? `Ch ${c.chapter}` : (c.title ? 'Oneshot' : '—');
+    row.appendChild(no);
+    const t = document.createElement('div');
+    t.className = 't';
+    t.textContent = c.title || '';
+    row.appendChild(t);
+    const grp = document.createElement('div');
+    grp.className = 'grp';
+    grp.textContent = c.group || '';
+    row.appendChild(grp);
+    const when = document.createElement('div');
+    when.className = 'date';
+    when.textContent = fmtWhen(c.readableAt);
+    row.appendChild(when);
+    list.appendChild(row);
+  }
+}
+
+// ---------- Reader ----------
+let readerState = null; // {mangaId, feed, idx, home}
+const readerEl = $('#reader');
+
+async function openReader(mangaId, chapterId) {
+  // remember the hash we were on so Back restores it
+  if (!readerState) readerState = { prevHash: location.hash };
+  history.replaceState(null, '', `#/read/${mangaId}/${chapterId}`);
+  readerEl.hidden = false;
+  $('#readerpages').innerHTML = '<div class="spin"></div>';
+  $('#readerstatus').hidden = false;
+  $('#readerstatus').textContent = 'Loading pages…';
+  $('#readertitle').textContent = '…';
+  readerState.mangaId = mangaId;
+  readerState.currentId = chapterId;
+
+  try {
+    const [{ manga: m }, { chapters }] = await Promise.all([
+      api(`/api/manga/${mangaId}`),
+      api(`/api/manga/${mangaId}/feed`),
+    ]);
+    readerState.title = m.title;
+    readerState.feed = chapters; // newest first
+    const idx = chapters.findIndex((c) => c.id === chapterId);
+    readerState.idx = idx;
+    const ch = chapters[idx] || {};
+    $('#readertitle').textContent = `${m.title} — ${ch.chapter ? 'Ch ' + ch.chapter : ch.title || ''}`;
+    $('#reader-prev').disabled = idx >= chapters.length - 1; // older chapter
+    $('#reader-next').disabled = idx <= 0; // newer
+    if (ch.externalUrl) {
+      $('#readerpages').innerHTML = '<div class="empty">This chapter is hosted off MangaDex.<br><a href="#" id="extlink">Open publisher page</a></div>';
+      $('#extlink').onclick = (e) => { e.preventDefault(); window.open(ch.externalUrl, '_blank'); };
+      return;
+    }
+    await loadPages(ch);
+  } catch (e) {
+    $('#readerpages').innerHTML = `<div class="error">Failed to load chapter: ${e.message || e}</div>`;
+    $('#readerstatus').hidden = true;
+  }
+}
+
+async function loadPages(ch) {
+  const box = $('#readerpages');
+  box.innerHTML = '<div class="spin"></div>';
+  const home = await api(`/api/athome/${readerState.currentId}`);
+  readerState.home = home;
+  const urls = prefs.quality === 'data' ? home.pages : (home.pagesSaver.length ? home.pagesSaver : home.pages);
+  box.innerHTML = '';
+  box.className = prefs.fit === 'height' ? 'fit-height' : '';
+  readerEl.classList.toggle('fit-height', prefs.fit === 'height');
+  urls.forEach((u, i) => {
+    const el = img(u, `page ${i + 1}`, i < 3);
+    el.className = 'page';
+    box.appendChild(el);
+  });
+  // never leave the reader silently blank: if every page failed (expired CDN
+  // session, blocked host, dead chapter), say so
+  setTimeout(() => {
+    const imgs2 = [...box.querySelectorAll('img.page')];
+    if (imgs2.length && imgs2.every((x) => x.complete && x.naturalWidth === 0)) {
+      box.innerHTML = '<div class="error">Pages failed to load — the chapter\'s CDN link may have expired. Reopen the chapter to fetch a fresh one.</div>';
+      $('#readerstatus').hidden = true;
+    }
+  }, 20000);
+  // restore saved scroll position for this chapter, else start at top
+  const pr = progress[readerState.mangaId];
+  if (pr && pr.chapterId === readerState.currentId && pr.scroll) {
+    box.scrollTop = pr.scroll;
+  }
+  // progress + read tracking while scrolling (replace, never stack, handlers)
+  if (box._scrollHandler) box.removeEventListener('scroll', box._scrollHandler);
+  box._scrollHandler = debounce(() => {
+    const st = readerState;
+    if (!st) return;
+    const pct = box.scrollTop / Math.max(1, box.scrollHeight - box.clientHeight);
+    const page = Math.min(Math.round(pct * (box.children.length - 1)), box.children.length - 1);
+    $('#reader-progress').textContent = `p${page + 1}/${box.children.length}`;
+    const readMapEntry = readMap[st.mangaId] || (readMap[st.mangaId] = {});
+    const wasNew = !readMapEntry[st.currentId];
+    readMapEntry[st.currentId] = Date.now();
+    progress[st.mangaId] = { chapterId: st.currentId, chapter: currentChapterNo(), page: page + 1, scroll: box.scrollTop, ts: Date.now() };
+    save('mr_read', readMap);
+    save('mr_progress', progress);
+    if (wasNew && box.scrollHeight - box.clientHeight - box.scrollTop < 80) {
+      // hit the bottom: whole chapter read
+      toast('Chapter finished — Next ›');
+    }
+  }, 250);
+  box.addEventListener('scroll', box._scrollHandler);
+  $('#readerstatus').hidden = true;
+}
+
+function currentChapterNo() {
+  const st = readerState;
+  const ch = st.feed && st.feed[st.idx];
+  return ch ? (ch.chapter || '') : '';
+}
+function debounce(fn, ms) {
+  let t;
+  return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
+}
+
+$('#reader-back').onclick = closeReader;
+function closeReader() {
+  const box = $('#readerpages');
+  if (box._scrollHandler) { box.removeEventListener('scroll', box._scrollHandler); box._scrollHandler = null; }
+  readerEl.hidden = true;
+  $('#readerpages').innerHTML = '';
+  $('#readerstatus').hidden = true;
+  const prev = (readerState && readerState.prevHash) || '#/discover';
+  readerState = null;
+  location.hash = prev.replace(/^#/, '');
+  render();
+}
+$('#reader-prev').onclick = () => stepReader(1);  // older chapter = higher idx (newest-first feed)
+$('#reader-next').onclick = () => stepReader(-1); // newer chapter = lower idx
+function stepReader(dir) {
+  const st = readerState;
+  if (!st || !st.feed) return;
+  const next = st.idx + dir;
+  if (next < 0 || next >= st.feed.length) return;
+  const ch = st.feed[next];
+  if (ch.externalUrl || ch.isUnavailable || !ch.pages) {
+    toast('That chapter has no readable pages');
+    return;
+  }
+  openReader(st.mangaId, ch.id);
+}
+$('#reader-quality').value = prefs.quality;
+$('#reader-quality').onchange = (e) => {
+  prefs.quality = e.target.value;
+  save('mr_prefs', prefs);
+  const st = readerState;
+  if (st && st.feed) {
+    const ch = st.feed[st.idx];
+    if (ch && !ch.externalUrl) loadPages(ch);
+  }
+};
+
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !readerEl.hidden) closeReader();
+  if (readerEl.hidden) return;
+  if (e.key === 'ArrowLeft') stepReader(1);
+  if (e.key === 'ArrowRight') stepReader(-1);
+});
+
+// ---------- nav wiring ----------
+for (const btn of document.querySelectorAll('#nav button')) {
+  btn.onclick = () => nav(`/${btn.dataset.nav}`);
+}
+$('#brand').onclick = () => nav('/discover');
+
+render();

@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>MangaNinja</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header id="topbar">
+    <div id="brand" title="MangaNinja">
+      <span id="logo">🥷</span><span id="brandname">Manga<b>Ninja</b></span>
+    </div>
+    <nav id="nav">
+      <button data-nav="library">Library</button>
+      <button data-nav="discover" class="active">Discover</button>
+      <button data-nav="latest">Latest</button>
+    </nav>
+    <form id="searchform">
+      <input id="searchbox" type="search" placeholder="Search MangaDex…" autocomplete="off" spellcheck="false">
+    </form>
+  </header>
+
+  <main id="view"></main>
+
+  <!-- full-screen reader overlay -->
+  <div id="reader" hidden>
+    <div id="readertop">
+      <button id="reader-back" title="Back (Esc)">← Back</button>
+      <div id="readertitle"></div>
+      <div id="readertools">
+        <select id="reader-quality" title="Image quality">
+          <option value="data-saver">Data saver</option>
+          <option value="data">Original</option>
+        </select>
+        <button id="reader-prev" title="Previous chapter">‹ Prev</button>
+        <div id="reader-progress"></div>
+        <button id="reader-next" title="Next chapter">Next ›</button>
+      </div>
+    </div>
+    <div id="readerpages"></div>
+    <div id="readerstatus"></div>
+  </div>
+
+  <div id="toast" hidden></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

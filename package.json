@@ -1,0 +1,57 @@
+{
+  "name": "manganinja",
+  "productName": "MangaNinja",
+  "version": "0.1.0",
+  "description": "Personal manga reading desktop app powered by the MangaDex API",
+  "main": "main.js",
+  "author": "richa <richa@localhost>",
+  "license": "MIT",
+  "homepage": "https://github.com/RichardPersaud/MangaNinja",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis",
+    "dist:linux": "electron-builder --linux AppImage deb",
+    "release": "electron-builder --win nsis -p always"
+  },
+  "build": {
+    "appId": "io.local.manganinja",
+    "productName": "MangaNinja",
+    "publish": {
+      "provider": "github",
+      "owner": "RichardPersaud",
+      "repo": "MangaNinja"
+    },
+    "files": [
+      "main.js",
+      "server.js",
+      "mangadex.js",
+      "updater.js",
+      "ui/**/*",
+      "package.json"
+    ],
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Graphics"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "MangaNinja"
+    }
+  },
+  "devDependencies": {
+    "electron": "^44.3.0",
+    "electron-builder": "^26.15.3",
+    "ws": "^8.21.3"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  }
+}
