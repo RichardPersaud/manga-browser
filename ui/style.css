@@ -83,12 +83,44 @@ h2 { font-size: 17px; margin: 24px 0 10px; color: var(--dim); font-weight: 600; 
   gap: 16px;
 }
 .card {
+  position: relative;
   background: var(--bg2);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   overflow: hidden;
   cursor: pointer;
   transition: transform 0.12s, border-color 0.12s;
+}
+/* quick add-to-library button over the poster's top corner */
+.card .quick-add {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 18px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(11, 14, 20, 0.75);
+  border: 1px solid var(--line);
+  color: var(--text);
+  backdrop-filter: blur(4px);
+  transition: transform 0.12s, border-color 0.12s, background 0.12s;
+}
+.card .quick-add:hover {
+  border-color: var(--accent2);
+  color: #fff;
+  transform: scale(1.1);
+}
+.card .quick-add.inlib {
+  background: #243b2a;
+  border-color: #3e6b4a;
+  color: #6ddf8e;
 }
 .card:hover { transform: translateY(-3px); border-color: var(--accent2); }
 .card img.cover {

@@ -179,6 +179,31 @@ function mangaCard(m, extra) {
   card.className = 'card';
   card.onclick = () => nav(`/manga/${m.id}`);
   card.appendChild(img(m.cover, m.title, true, 'cover'));
+  // quick +/✓ in the top corner: add to library without opening the detail page
+  const quick = document.createElement('button');
+  quick.type = 'button';
+  quick.className = 'quick-add' + (library[m.id] && library[m.id].inLib ? ' inlib' : '');
+  quick.textContent = library[m.id] && library[m.id].inLib ? '✓' : '+';
+  quick.title = quick.textContent === '✓' ? 'In library — click to remove' : 'Add to library';
+  quick.onclick = (e) => {
+    e.stopPropagation(); // don't open the detail page
+    const wasIn = library[m.id] && library[m.id].inLib;
+    if (wasIn) {
+      delete library[m.id].inLib;
+      toast('Removed from library');
+    } else {
+      library[m.id] = library[m.id] || { title: m.title, cover: m.cover };
+      library[m.id].inLib = true;
+      library[m.id].ts = Date.now();
+      toast('Added to library');
+    }
+    const isIn = library[m.id] && library[m.id].inLib;
+    quick.textContent = isIn ? '✓' : '+';
+    quick.classList.toggle('inlib', !!isIn);
+    quick.title = isIn ? 'In library — click to remove' : 'Add to library';
+    save('mr_library', library);
+  };
+  card.appendChild(quick);
   const meta = document.createElement('div');
   meta.className = 'meta';
   const t = document.createElement('div');
