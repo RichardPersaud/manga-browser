@@ -57,8 +57,51 @@ img { max-width: 100%; }
 #nav { display: flex; gap: 6px; }
 #nav button { background: transparent; border-color: transparent; }
 #nav button.active { background: var(--bg3); border-color: var(--line); color: #fff; }
-#searchform { margin-left: auto; flex: 1; max-width: 420px; }
+#searchform { margin-left: auto; flex: 1; max-width: 420px; position: relative; }
 #searchbox { width: 100%; }
+/* search suggestion dropdown */
+#sugdrop {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 30;
+  background: var(--bg2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+  max-height: 380px;
+  overflow-y: auto;
+}
+#sugdrop .sughead {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--dim);
+  padding: 8px 12px 2px;
+}
+.sugitem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px;
+  cursor: pointer;
+}
+.sugitem img {
+  width: 26px;
+  height: 38px;
+  object-fit: cover;
+  border-radius: 4px;
+  background: var(--bg3);
+  flex-shrink: 0;
+}
+.sugitem .t {
+  font-size: 13.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sugitem.active, .sugitem:hover { background: var(--bg3); }
 
 /* ---------- grids ---------- */
 #view { padding: 22px; max-width: 1500px; margin: 0 auto; }
@@ -76,6 +119,26 @@ h1 { font-size: 20px; margin: 4px 0 16px; }
 .crumbs a:hover { text-decoration: underline; }
 .crumbs .sep { opacity: 0.5; }
 .crumbs .here { color: var(--text); }
+
+/* browse-all letter bar + pagination */
+#letterbar {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+#letterbar .letter { min-width: 34px; padding: 5px 4px; font-size: 13px; text-align: center; }
+#letterbar .letter.active { background: var(--bg3); border-color: var(--accent2); color: #fff; }
+.pager {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  justify-content: center;
+  margin: 22px 0 8px;
+}
+.pager .pglabel { color: var(--dim); font-size: 13px; min-width: 70px; text-align: center; }
+.pager .pgnum { min-width: 36px; padding: 7px 6px; text-align: center; }
+.pager .pgnum.active { background: var(--bg3); border-color: var(--accent2); color: #fff; }
 h2 { font-size: 17px; margin: 24px 0 10px; color: var(--dim); font-weight: 600; }
 .grid {
   display: grid;

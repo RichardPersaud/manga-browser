@@ -93,14 +93,19 @@ async function req(pathname, params, opts = {}) {
       continue;
     }
     if (!res.ok) {
-      // 4xx other than 429: give up, surface the body's error detail if present
-      let detail = `MangaDex HTTP ${res.status}`;
+      // real API errors come as JSON with errors[] — surface their detail;
+      // non-JSON bodies (HTML "invalid request" pages from the edge) are
+      // transient flukes and get retried like 5xx
+      const raw = await res.text();
+      let detail = null;
       try {
-        const body = await res.json();
-        const d = body && body.errors && body.errors[0] && body.errors[0].detail;
-        if (d) detail = d;
+        const body = JSON.parse(raw);
+        detail = body && body.errors && body.errors[0] && body.errors[0].detail;
       } catch { /* not JSON */ }
-      throw new ApiError(detail, res.status);
+      if (detail) throw new ApiError(detail, res.status);
+      lastErr = new ApiError(`MangaDex HTTP ${res.status}`, res.status);
+      await sleep(1500 * (attempt + 1));
+      continue;
     }
     return res.json();
   }
@@ -211,8 +216,8 @@ async function searchManga(q, { limit = 24, offset = 0 } = {}) {
   return out;
 }
 
-async function listManga(order, { limit = 24, offset = 0, tag = null } = {}) {
-  const key = `l:${order}:${limit}:${offset}:${tag || ''}`;
+async function listManga(order, { limit = 24, offset = 0, tag = null, dir = 'desc' } = {}) {
+  const key = `l:${order}:${limit}:${offset}:${tag || ''}:${dir}`;
   const cached = cacheGet('list', key, 8 * 60 * 1000);
   if (cached) return cached;
   const params = {
@@ -222,7 +227,7 @@ async function listManga(order, { limit = 24, offset = 0, tag = null } = {}) {
     'contentRating[]': ['safe', 'suggestive'],
     hasAvailableChapters: 'true',
     'availableTranslatedLanguage[]': ['en'],
-    [`order[${order}]`]: 'desc',
+    [`order[${order}]`]: dir === 'asc' ? 'asc' : 'desc',
   };
   if (tag) {
     if (!/^[0-9a-f-]{36}$/i.test(tag)) throw new ApiError('Bad tag id', 400);
@@ -294,6 +299,63 @@ async function chapterCount(id) {
   return out;
 }
 
+// ---------- alphabetical browse (Browse all) ----------
+// MangaDex has no "starts with" filter, but order[title]=asc puts each first
+// letter's titles in one contiguous block — so a letter's block start is found
+// by binary search over offsets (~13 cheap limit=1 probes, cached 6h) and the
+// block is then sliced forward directly.
+function browseParams(limit, offset) {
+  return {
+    limit: String(limit),
+    offset: String(offset),
+    'includes[]': ['cover_art', 'author', 'artist'],
+    'contentRating[]': ['safe', 'suggestive'],
+    hasAvailableChapters: 'true',
+    'availableTranslatedLanguage[]': ['en'],
+    'order[title]': 'asc',
+  };
+}
+
+// smallest offset whose first title starts with `key` (monotonic predicate:
+// titles sort by raw title, so first-character runs are contiguous)
+async function letterStart(key) {
+  const cached = cacheGet('letters', key, 6 * 60 * 60 * 1000);
+  if (cached !== undefined) return cached;
+  const probe = async (o) => {
+    const j = await req('/manga', browseParams(1, o));
+    const t = j.data && j.data.length ? titleOf(j.data[0]) : '';
+    return { total: typeof j.total === 'number' ? j.total : 0, first: (t || '').toLowerCase().trim().charAt(0) };
+  };
+  const { total } = await probe(0);
+  let lo = 0, hi = Math.min(total, 9999); // API caps offset+limit at 10000
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    const { first } = await probe(mid);
+    if (first < key) lo = mid + 1;
+    else hi = mid;
+  }
+  cachePut('letters', key, lo);
+  return lo;
+}
+
+async function browseAll({ letter = '', limit = 36, offset = 0 } = {}) {
+  const key = (letter || '').toLowerCase();
+  if (/^[a-z]$/.test(key)) {
+    const start = await letterStart(key);
+    if (start >= 10000 - limit) return { results: [], more: false }; // block beyond the API's offset cap
+    const j = await req('/manga', browseParams(limit, Math.min(start + offset, 10000 - limit)));
+    // defensive first-char filter (block should be contiguous)
+    const results = (j.data || []).map(slimManga)
+      .filter((m) => (m.title || '').toLowerCase().trim().charAt(0) === key);
+    return { results, more: results.length === limit };
+  }
+  // all: plain alphabetical paging
+  const j = await req('/manga', browseParams(limit, offset));
+  const results = (j.data || []).map(slimManga);
+  const total = typeof j.total === 'number' ? j.total : 0;
+  return { results, more: offset + results.length < total };
+}
+
 // global latest-updates feed: chapters across all manga, newest first.
 // The tip of the feed is flooded with official-publisher chapters (externalUrl,
 // pages=0 — sometimes hundreds, some scheduled with far-future publishAt), so
@@ -357,6 +419,7 @@ module.exports = {
   ApiError,
   searchManga,
   listManga,
+  browseAll,
   manga,
   statistics,
   chapterCount,

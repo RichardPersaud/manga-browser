@@ -73,12 +73,14 @@ function proxiedUrl(src) {
   return '/img?u=' + b64;
 }
 function img(src, alt, lazy = true, className = '') {
-  if (!src) return '';
   const el = new Image();
   if (lazy) el.loading = 'lazy';
   el.alt = alt || '';
   if (className) el.className = className;
-  el.src = proxiedUrl(src);
+  // failed/broken covers swap to the bundled placeholder (onerror is nulled
+  // first so the placeholder's own failure can't loop)
+  el.onerror = () => { el.onerror = null; el.src = '/img/placeholder.png'; };
+  el.src = src ? proxiedUrl(src) : '/img/placeholder.png';
   return el;
 }
 
@@ -360,27 +362,87 @@ async function renderLibrary() {
 }
 
 // ---------- Discover ----------
-let discoverTab = 'popular';
+const LETTERS = 'abcdefghijklmnopqrstuvwxyz'.split('');
 async function renderDiscover() {
   const q = new URLSearchParams((location.hash.split('?')[1] || ''));
-  discoverTab = q.get('tab') === 'latest' ? 'latest' : discoverTab;
-  const order = discoverTab === 'latest' ? 'latestUploadedChapter' : 'followedCount';
+  const tab = q.get('tab') || 'all';
+  const letter = (q.get('letter') || '').toLowerCase();
+  const page = Math.max(1, parseInt(q.get('page') || '1', 10) || 1);
+  const limit = 36;
+
   view.innerHTML = `
-    <div style="display:flex;gap:10px;align-items:center;margin-bottom:16px">
+    <div style="display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
       <h1 style="margin:0">Discover</h1>
+      <button id="tab-all">Browse all</button>
       <button id="tab-popular">Popular</button>
       <button id="tab-latest">Latest updates</button>
     </div>
+    <div id="letterbar" hidden></div>
     <div class="spin"></div>`;
-  const pop = $('#tab-popular'), lat = $('#tab-latest');
-  pop.classList.toggle('active', discoverTab === 'popular');
-  lat.classList.toggle('active', discoverTab === 'latest');
-  pop.onclick = () => { discoverTab = 'popular'; nav('/discover?tab=popular'); render(); };
-  lat.onclick = () => { discoverTab = 'latest'; nav('/discover?tab=latest'); render(); };
-  const { results } = await api(`/api/discover?order=${order}&limit=36`);
-  view.querySelectorAll('.spin').forEach((el) => el.remove());
-  const g = grid(results, (m) => discoverTab === 'latest' && m.latestUploadedAt ? fmtWhen(m.latestUploadedAt) : '');
-  view.appendChild(g);
+  const tAll = $('#tab-all'), tPop = $('#tab-popular'), tLat = $('#tab-latest');
+  tAll.classList.toggle('active', tab === 'all');
+  tPop.classList.toggle('active', tab === 'popular');
+  tLat.classList.toggle('active', tab === 'latest');
+  tAll.onclick = () => nav('/discover?tab=all');
+  tPop.onclick = () => nav('/discover?tab=popular');
+  tLat.onclick = () => nav('/discover?tab=latest');
+
+  if (tab === 'all') {
+    const bar = $('#letterbar');
+    bar.hidden = false;
+    const mkLetter = (label, value) => {
+      const b = document.createElement('button');
+      b.className = 'letter' + (value === letter ? ' active' : '');
+      b.textContent = label;
+      b.onclick = () => nav(`/discover?tab=all&letter=${value}&page=1`);
+      return b;
+    };
+    bar.appendChild(mkLetter('All', ''));
+    for (const l of LETTERS) bar.appendChild(mkLetter(l.toUpperCase(), l));
+  }
+
+  try {
+    if (tab === 'all') {
+      const data = await api(`/api/browse?letter=${encodeURIComponent(letter)}&offset=${(page - 1) * limit}&limit=${limit}`);
+      view.querySelectorAll('.spin').forEach((el) => el.remove());
+      if (!data.results.length) { view.innerHTML += '<div class="empty">Nothing here.</div>'; return; }
+      view.appendChild(grid(data.results));
+      // page through the (letter-filtered) alphabetical stream
+      const pager = document.createElement('div');
+      pager.className = 'pager';
+      const goPage = (p) => nav(`/discover?tab=all&letter=${encodeURIComponent(letter)}&page=${p}`);
+      const prev = document.createElement('button');
+      prev.textContent = '‹ Prev';
+      prev.disabled = page <= 1;
+      prev.onclick = () => goPage(page - 1);
+      pager.appendChild(prev);
+      // numbered page buttons: a window of 5 around the current page
+      const firstShown = Math.max(1, page - 2);
+      for (let p = firstShown; p < firstShown + 5; p++) {
+        if (p > page && !data.more) break; // no pages beyond the end
+        const b = document.createElement('button');
+        b.className = 'pgnum' + (p === page ? ' active' : '');
+        b.textContent = p;
+        if (p !== page) b.onclick = () => goPage(p);
+        pager.appendChild(b);
+      }
+      const next = document.createElement('button');
+      next.textContent = 'Next ›';
+      next.disabled = !data.more;
+      next.onclick = () => goPage(page + 1);
+      pager.appendChild(next);
+      view.appendChild(pager);
+    } else {
+      const order = tab === 'latest' ? 'latestUploadedChapter' : 'followedCount';
+      const { results } = await api(`/api/discover?order=${order}&limit=36`);
+      view.querySelectorAll('.spin').forEach((el) => el.remove());
+      if (!results.length) { view.innerHTML += '<div class="empty">Nothing found.</div>'; return; }
+      view.appendChild(grid(results, (m) => tab === 'latest' && m.latestUploadedAt ? fmtWhen(m.latestUploadedAt) : ''));
+    }
+  } catch (err) {
+    view.querySelectorAll('.spin').forEach((el) => el.remove());
+    view.innerHTML += `<div class="error">${err.message || err}</div>`;
+  }
 }
 
 // search (a real hash route, so Back works and the breadcrumb is clickable)
@@ -405,8 +467,88 @@ $('#searchform').onsubmit = (e) => {
   e.preventDefault();
   const qv = $('#searchbox').value.trim();
   if (!qv) return;
+  hideSug();
   nav(`/search/${encodeURIComponent(qv)}`);
 };
+
+// ---------- search suggestions ----------
+// typing shows live title matches; focusing an empty box shows popular picks.
+// picking a suggestion jumps straight to the manga; Enter still full-searches.
+const sugbox = $('#sugdrop');
+let sugItems = [];
+let sugIdx = -1;
+function hideSug() {
+  sugbox.hidden = true;
+  sugbox.textContent = '';
+  sugItems = [];
+  sugIdx = -1;
+}
+function pickSug(m) {
+  $('#searchbox').value = '';
+  hideSug();
+  $('#searchbox').blur();
+  nav(`/manga/${m.id}`);
+}
+function renderSug(items, heading) {
+  sugbox.textContent = '';
+  sugItems = items || [];
+  sugIdx = -1;
+  if (!sugItems.length) { sugbox.hidden = true; return; }
+  if (heading) {
+    const h = document.createElement('div');
+    h.className = 'sughead';
+    h.textContent = heading;
+    sugbox.appendChild(h);
+  }
+  sugItems.forEach((m, i) => {
+    const row = document.createElement('div');
+    row.className = 'sugitem';
+    row.appendChild(img(m.cover, m.title, false));
+    const t = document.createElement('div');
+    t.className = 't';
+    t.textContent = m.title;
+    row.appendChild(t);
+    // mousedown beats the input's blur, so the click lands before hiding
+    row.onmousedown = (e) => { e.preventDefault(); pickSug(m); };
+    sugbox.appendChild(row);
+  });
+  sugbox.hidden = false;
+}
+function highlightSug() {
+  [...sugbox.querySelectorAll('.sugitem')].forEach((el, i) => el.classList.toggle('active', i === sugIdx));
+}
+$('#searchbox').addEventListener('input', debounce(async (e) => {
+  const qv = e.target.value.trim();
+  if (qv.length < 2) { hideSug(); return; }
+  try {
+    const { results } = await api(`/api/search?q=${encodeURIComponent(qv)}&limit=8`);
+    renderSug(results);
+  } catch { hideSug(); }
+}, 400));
+$('#searchbox').addEventListener('focus', async () => {
+  if ($('#searchbox').value.trim()) return;
+  try {
+    const { results } = await api('/api/discover?order=followedCount&limit=6');
+    renderSug(results, 'Popular right now');
+  } catch { /* suggestions are best-effort */ }
+});
+$('#searchbox').addEventListener('blur', () => setTimeout(hideSug, 150));
+$('#searchbox').addEventListener('keydown', (e) => {
+  if (sugbox.hidden) return;
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    const last = sugItems.length - 1;
+    sugIdx = e.key === 'ArrowDown' ? Math.min(sugIdx + 1, last) : Math.max(sugIdx - 1, 0);
+    highlightSug();
+  } else if (e.key === 'Enter') {
+    if (sugIdx >= 0 && sugItems[sugIdx]) {
+      e.preventDefault(); // Enter with a highlighted suggestion = go there
+      pickSug(sugItems[sugIdx]);
+    }
+  } else if (e.key === 'Escape') {
+    hideSug();
+  }
+});
 
 // ---------- Latest ----------
 async function renderLatest() {

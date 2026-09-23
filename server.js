@@ -273,6 +273,19 @@ async function route(req, res) {
     return sendJson(res, 200, { results });
   }
 
+  if (p === '/api/browse') {
+    // alphabetical Browse all with optional first-letter block
+    try {
+      return sendJson(res, 200, await md.browseAll({
+        letter: (q.get('letter') || '').toLowerCase(),
+        limit: Math.min(parseInt(q.get('limit') || '36', 10) || 36, 100),
+        offset: Math.max(parseInt(q.get('offset') || '0', 10) || 0, 0),
+      }));
+    } catch (e) {
+      return sendJson(res, 502, { error: String(e.message || e) });
+    }
+  }
+
   if (p === '/api/discover') {
     const order = q.get('order') === 'latestUploadedChapter' ? 'latestUploadedChapter' : 'followedCount';
     const results = await md.listManga(order, {
