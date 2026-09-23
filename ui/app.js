@@ -4,7 +4,7 @@
    the /img proxy (some environments block direct hotlinking). */
 
 // ---------- storage ----------
-const KEYS = ['mr_library', 'mr_progress', 'mr_read', 'mr_prefs'];
+const KEYS = ['mr_library', 'mr_progress', 'mr_read', 'mr_prefs', 'mr_history'];
 function load(key) {
   try { return JSON.parse(localStorage.getItem(key)) || {}; }
   catch { return {}; }
@@ -17,6 +17,7 @@ let library = load('mr_library');   // {id: {title, cover, ts, seenAt}}
 let progress = load('mr_progress'); // {mangaId: {chapterId, chapter, page, ts}}
 let readMap = load('mr_read');      // {mangaId: {chapterId: ts}}
 let prefs = Object.assign({ quality: 'data-saver' }, load('mr_prefs'));
+let viewedHistory = load('mr_history'); // {id: {title, cover, seenAt}} — incl. non-library titles
 
 // ---------- durable backup (mirrors AniNinja's debounced design) ----------
 let backupTimer = null;
@@ -26,7 +27,7 @@ function scheduleBackup() {
 }
 function backupPayload() {
   return {
-    prefs, library, progress, read: readMap,
+    prefs, library, progress, read: readMap, history: viewedHistory,
   };
 }
 function sendBackup() {
@@ -228,11 +229,52 @@ function grid(items, mkExtra) {
 async function renderLibrary() {
   document.title = 'MangaNinja — Library';
   const ids = Object.entries(library).sort((x, y) => (y[1].ts || 0) - (x[1].ts || 0));
-  if (!ids.length) {
+  const recents = Object.entries(viewedHistory)
+    .sort((x, y) => (y[1].seenAt || 0) - (x[1].seenAt || 0))
+    .slice(0, 20);
+  if (!ids.length && !recents.length) {
     view.innerHTML = `<h1>Library</h1><div class="empty">Nothing saved yet — find something in Discover and hit “+ Library”.</div>`;
     return;
   }
-  view.innerHTML = `<h1>Library <span class="sub" style="font-size:13px;color:var(--dim)">${ids.length} titles</span></h1>`;
+  view.innerHTML = ids.length
+    ? `<h1>Library <span class="sub" style="font-size:13px;color:var(--dim)">${ids.length} titles</span></h1>`
+    : `<h1>Library</h1><div class="empty">Nothing saved yet — find something in Discover and hit “+ Library”.</div>`;
+
+  // recently viewed: side-scrolling strip above the saved grid
+  if (recents.length) {
+    const sec = document.createElement('section');
+    const h = document.createElement('h2');
+    h.textContent = 'Recently viewed';
+    sec.appendChild(h);
+    const row = document.createElement('div');
+    row.className = 'hrow';
+    for (const [id, e] of recents) {
+      const hc = document.createElement('div');
+      hc.className = 'hcard';
+      hc.onclick = () => nav(`/manga/${id}`);
+      hc.appendChild(img(e.cover, e.title, true, 'cover'));
+      const rm = document.createElement('button');
+      rm.type = 'button';
+      rm.className = 'remove';
+      rm.textContent = '✕';
+      rm.title = 'Remove from recently viewed';
+      rm.onclick = (ev) => {
+        ev.stopPropagation();
+        delete viewedHistory[id];
+        save('mr_history', viewedHistory);
+        render();
+      };
+      hc.appendChild(rm);
+      const t = document.createElement('div');
+      t.className = 't';
+      t.textContent = e.title;
+      t.title = e.title;
+      hc.appendChild(t);
+      row.appendChild(hc);
+    }
+    sec.appendChild(row);
+    view.prepend(sec);
+  }
   const g = document.createElement('div');
   g.className = 'grid';
   for (const [id, entry] of ids) {
@@ -374,6 +416,11 @@ async function renderManga(id) {
     entry.seenAt = Date.now();
     save('mr_library', library);
   }
+  // recently-viewed trail (kept even for titles not saved to the library)
+  viewedHistory[id] = { title: m.title, cover: m.cover, seenAt: Date.now() };
+  const bySeen = Object.entries(viewedHistory).sort((x, y) => (y[1].seenAt || 0) - (x[1].seenAt || 0));
+  if (bySeen.length > 30) for (const [k] of bySeen.slice(30)) delete viewedHistory[k];
+  save('mr_history', viewedHistory);
 
   const status = m.status || '';
   const subBits = [m.year, m.lastChapter ? `${m.lastChapter} chapters` : '', m.author].filter(Boolean).join(' · ');
@@ -418,7 +465,7 @@ async function renderManga(id) {
   const rt = m.rating || {};
   const score = document.createElement('div');
   score.className = 'score';
-  score.textContent = rt.average != null ? `★ ${rt.average.toFixed(2)}` : '★ —';
+  score.textContent = rt.average != null ? `☆ ${rt.average.toFixed(2)}` : '☆ —';
   const follows = document.createElement('div');
   follows.className = 'follows';
   follows.textContent = rt.follows ? `${rt.follows.toLocaleString()} followers` : 'No rating yet';
@@ -510,7 +557,7 @@ async function renderManga(id) {
     if (pr && pr.chapterId === c.id) {
       const cur = document.createElement('span');
       cur.className = 'current';
-      cur.textContent = '●';
+      cur.textContent = '○';
       cur.title = 'Last read';
       row.prepend(cur);
     }

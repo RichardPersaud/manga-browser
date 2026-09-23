@@ -336,6 +336,7 @@ async function route(req, res) {
           library: body.library && typeof body.library === 'object' ? body.library : {},
           progress: body.progress && typeof body.progress === 'object' ? body.progress : {},
           read: body.read && typeof body.read === 'object' ? body.read : {},
+          history: body.history && typeof body.history === 'object' ? body.history : {},
           savedAt: new Date().toISOString(),
         });
         return sendJson(res, 200, { ok: true });
