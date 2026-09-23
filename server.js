@@ -278,6 +278,7 @@ async function route(req, res) {
     const results = await md.listManga(order, {
       limit: Math.min(parseInt(q.get('limit') || '24', 10) || 24, 100),
       offset: Math.max(parseInt(q.get('offset') || '0', 10) || 0, 0),
+      tag: q.get('tag'),
     });
     return sendJson(res, 200, { results, order });
   }

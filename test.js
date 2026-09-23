@@ -48,7 +48,7 @@ async function head(url) {
   try {
     const detail = await md.manga(first.id);
     if (detail.id !== first.id) throw new Error('id mismatch');
-    console.log(`      tags: ${detail.tags.join(', ') || '(none)'}`);
+    console.log(`      tags: ${detail.tags.map((t) => t.name).join(', ') || '(none)'}`);
     feed = await md.mangaFeed(first.id, { lang: 'en', limit: 100 });
     if (!feed.length) throw new Error('no chapters');
     console.log(`      chapters: ${feed.length} (newest: v${feed[0].chapter || '?'} "${feed[0].title || '—'}" pages=${feed[0].pages})`);

@@ -158,7 +158,10 @@ function slimManga(manga) {
     description: (a.description && (a.description.en || Object.values(a.description).find(Boolean))) || '',
     status: a.status || '',
     year: a.year || null,
-    tags: (a.tags || []).map((t) => t.attributes && t.attributes.name && (t.attributes.name.en || Object.values(t.attributes.name)[0])).filter(Boolean).slice(0, 8),
+    tags: (a.tags || []).map((t) => ({
+      id: t.id,
+      name: t.attributes && t.attributes.name && (t.attributes.name.en || Object.values(t.attributes.name)[0]),
+    })).filter((t) => t.id && t.name).slice(0, 8),
     author: (author && author.attributes && author.attributes.name) || null,
     artist: (artist && artist.attributes && artist.attributes.name) || null,
     lastChapter: a.lastChapter || null,
@@ -208,11 +211,11 @@ async function searchManga(q, { limit = 24, offset = 0 } = {}) {
   return out;
 }
 
-async function listManga(order, { limit = 24, offset = 0 } = {}) {
-  const key = `l:${order}:${limit}:${offset}`;
+async function listManga(order, { limit = 24, offset = 0, tag = null } = {}) {
+  const key = `l:${order}:${limit}:${offset}:${tag || ''}`;
   const cached = cacheGet('list', key, 8 * 60 * 1000);
   if (cached) return cached;
-  const j = await req('/manga', {
+  const params = {
     limit: String(limit),
     offset: String(offset),
     'includes[]': ['cover_art', 'author', 'artist'],
@@ -220,7 +223,12 @@ async function listManga(order, { limit = 24, offset = 0 } = {}) {
     hasAvailableChapters: 'true',
     'availableTranslatedLanguage[]': ['en'],
     [`order[${order}]`]: 'desc',
-  });
+  };
+  if (tag) {
+    if (!/^[0-9a-f-]{36}$/i.test(tag)) throw new ApiError('Bad tag id', 400);
+    params['includedTags[]'] = [tag];
+  }
+  const j = await req('/manga', params);
   const out = (j.data || []).map(slimManga);
   cachePut('list', key, out);
   return out;

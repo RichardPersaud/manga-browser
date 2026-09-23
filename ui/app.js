@@ -65,11 +65,12 @@ function fmtWhen(iso) {
 // images: MangaDex hosts replace hotlinked images with a placeholder (a valid
 // 200 response, so onerror never fires) — route every MangaDex image through
 // our /img proxy from the start; the server sends the proper User-Agent
-function img(src, alt, lazy = true) {
+function img(src, alt, lazy = true, className = '') {
   if (!src) return '';
   const el = new Image();
   if (lazy) el.loading = 'lazy';
   el.alt = alt || '';
+  if (className) el.className = className;
   if (/mangadex\.(org|network)/.test(src)) {
     // base64url-safe encoding (plain base64's + and / would corrupt the query)
     const b64 = btoa(unescape(encodeURIComponent(src))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -93,7 +94,18 @@ const routes = {
   discover: renderDiscover,
   latest: renderLatest,
   manga: renderManga,
+  tag: renderTag,
 };
+
+// browse everything in one category (tag)
+async function renderTag(tagId, encodedName) {
+  const name = decodeURIComponent(encodedName || 'Category').replace(/</g, '&lt;');
+  view.innerHTML = `<h1>${name}</h1><div class="spin"></div>`;
+  const { results } = await api(`/api/discover?order=followedCount&tag=${encodeURIComponent(tagId)}&limit=36`);
+  view.querySelectorAll('.spin').forEach((el) => el.remove());
+  if (!results.length) { view.innerHTML += '<div class="empty">Nothing found in this category.</div>'; return; }
+  view.appendChild(grid(results));
+}
 function nav(to) { location.hash = to; }
 window.addEventListener('hashchange', render);
 function parseHash() {
@@ -104,13 +116,14 @@ function parseHash() {
 
 async function render() {
   if (!$('#reader').hidden) return; // reader overlay owns the screen
-  const { name, a } = parseHash();
+  const { name, a, b } = parseHash();
   for (const btn of document.querySelectorAll('#nav button')) {
     btn.classList.toggle('active', btn.dataset.nav === name);
   }
   $('#searchform').style.display = name === 'library' ? 'none' : '';
   try {
     if (name === 'manga' && a) await routes.manga(a);
+    else if (name === 'tag' && a) await routes.tag(a, b);
     else if (routes[name]) await routes[name]();
     else await routes.discover();
   } catch (e) {
@@ -123,7 +136,7 @@ function mangaCard(m, extra) {
   const card = document.createElement('div');
   card.className = 'card';
   card.onclick = () => nav(`/manga/${m.id}`);
-  card.appendChild(img(m.cover, m.title));
+  card.appendChild(img(m.cover, m.title, true, 'cover'));
   const meta = document.createElement('div');
   meta.className = 'meta';
   const t = document.createElement('div');
@@ -160,7 +173,7 @@ async function renderLibrary() {
     const card = document.createElement('div');
     card.className = 'card';
     card.onclick = () => nav(`/manga/${id}`);
-    card.appendChild(img(entry.cover, entry.title));
+    card.appendChild(img(entry.cover, entry.title, true, 'cover'));
     const meta = document.createElement('div');
     meta.className = 'meta';
     const t = document.createElement('div');
@@ -273,6 +286,7 @@ async function renderLatest() {
 }
 
 // ---------- Manga detail ----------
+const STATUS_LABELS = { on_hiatus: 'Hiatus', cancelled: 'Cancelled', ongoing: 'Ongoing', completed: 'Completed', hiatus: 'Hiatus' };
 async function renderManga(id) {
   view.innerHTML = `<div class="spin"></div>`;
   const [{ manga: m }, { chapters }] = await Promise.all([
@@ -290,25 +304,48 @@ async function renderManga(id) {
     save('mr_library', library);
   }
 
-  const statusText = [m.status, m.year, m.lastChapter ? `${m.lastChapter} chs` : ''].filter(Boolean).join(' · ');
+  const status = m.status || '';
+  const subBits = [m.year, m.lastChapter ? `${m.lastChapter} chapters` : '', m.author].filter(Boolean).join(' · ');
+  const desc = (m.description || '').replace(/</g, '&lt;');
+  const descId = 'desc-' + id.slice(0, 8);
   view.innerHTML = `
-    <div id="detail">
-      <div id="coverbox"></div>
-      <div class="info">
-        <h1>${m.title.replace(/</g, '&lt;')}</h1>
-        <div class="sub">${statusText}${m.author ? ` · ${m.author.replace(/</g, '&lt;')}` : ''}</div>
-        <div class="tags">${m.tags.map((t) => `<span>${t.replace(/</g, '&lt;')}</span>`).join('')}</div>
-        <div class="desc">${(m.description || '').replace(/</g, '&lt;')}</div>
-        <div class="actions">
-          <button id="librarybtn">+ Library</button>
-          <button id="resumeBtn" hidden>Resume reading</button>
+    <div id="detailwrap">
+      <div class="backdrop"></div>
+      <div id="detail">
+        <div id="coverbox"></div>
+        <div class="info">
+          <h1>${m.title.replace(/</g, '&lt;')}${status ? `<span class="status-badge ${status}">${STATUS_LABELS[status] || status}</span>` : ''}</h1>
+          ${subBits ? `<div class="sub">${subBits.replace(/</g, '&lt;')}</div>` : ''}
+          <div class="tags">${m.tags.map((t) =>
+            `<button data-tag="${t.id}" data-name="${encodeURIComponent(t.name)}">${t.name.replace(/</g, '&lt;')}</button>`).join('')}</div>
+          <div class="desc clamped" id="${descId}">${desc}</div>
+          ${desc ? `<button class="desc-toggle" data-desc="${descId}">Show more</button>` : ''}
+          <div class="actions">
+            <button id="librarybtn">+ Library</button>
+            <button id="resumeBtn" hidden>Resume reading</button>
+          </div>
         </div>
       </div>
     </div>
     <h2>Chapters (${chapters.length})</h2>
     <div class="chapters" id="chlist"></div>`;
 
-  $('#coverbox').appendChild(img(m.coverFull || m.cover, m.title, false));
+  $('#detailwrap .backdrop').style.backgroundImage = `url("${m.coverFull || m.cover}")`;
+  $('#coverbox').appendChild(img(m.coverFull || m.cover, m.title, false, 'cover'));
+
+  // clickable tags -> browse that category
+  for (const btn of document.querySelectorAll('#detail .tags button')) {
+    btn.onclick = () => nav(`/tag/${btn.dataset.tag}/${btn.dataset.name}`);
+  }
+  // synopsis 3-line clamp with show more/less
+  const toggle = document.querySelector('.desc-toggle');
+  if (toggle) {
+    toggle.onclick = () => {
+      const d = document.getElementById(toggle.dataset.desc);
+      const clamped = d.classList.toggle('clamped');
+      toggle.textContent = clamped ? 'Show more' : 'Show less';
+    };
+  }
 
   const libBtn = $('#librarybtn');
   const isInNow = () => !!library[id] && !!library[id].inLib;
