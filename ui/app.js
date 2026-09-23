@@ -62,22 +62,22 @@ function fmtWhen(iso) {
   if (diff < 7 * 86400 * 1000) return Math.floor(diff / 86400000) + 'd ago';
   return d.toISOString().slice(0, 10);
 }
-// images: MangaDex hosts replace hotlinked images with a placeholder (a valid
-// 200 response, so onerror never fires) — route every MangaDex image through
-// our /img proxy from the start; the server sends the proper User-Agent
+// MangaDex hosts replace hotlinked images with a placeholder (a valid 200, so
+// onerror never fires) — route every MangaDex image through our /img proxy;
+// the server sends the proper User-Agent
+function proxiedUrl(src) {
+  if (!/mangadex\.(org|network)/.test(src)) return src;
+  // base64url-safe encoding (plain base64's + and / would corrupt the query)
+  const b64 = btoa(unescape(encodeURIComponent(src))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  return '/img?u=' + b64;
+}
 function img(src, alt, lazy = true, className = '') {
   if (!src) return '';
   const el = new Image();
   if (lazy) el.loading = 'lazy';
   el.alt = alt || '';
   if (className) el.className = className;
-  if (/mangadex\.(org|network)/.test(src)) {
-    // base64url-safe encoding (plain base64's + and / would corrupt the query)
-    const b64 = btoa(unescape(encodeURIComponent(src))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-    el.src = '/img?u=' + b64;
-  } else {
-    el.src = src;
-  }
+  el.src = proxiedUrl(src);
   return el;
 }
 
@@ -330,7 +330,8 @@ async function renderManga(id) {
     <h2>Chapters (${chapters.length})</h2>
     <div class="chapters" id="chlist"></div>`;
 
-  $('#detailwrap .backdrop').style.backgroundImage = `url("${m.coverFull || m.cover}")`;
+  // background-image can't retry onerror — must go through the proxy too
+  $('#detailwrap .backdrop').style.backgroundImage = `url("${proxiedUrl(m.coverFull || m.cover)}")`;
   $('#coverbox').appendChild(img(m.coverFull || m.cover, m.title, false, 'cover'));
 
   // clickable tags -> browse that category
