@@ -49,7 +49,7 @@ function updaterStatus() {
 }
 
 const GH_LATEST =
-  'https://api.github.com/repos/RichardPersaud/MangaNinja/releases/latest';
+  'https://api.github.com/repos/RichardPersaud/manga-browser/releases/latest';
 
 // electron-updater stages installers in <cache>/MangaNinja-updater/pending before
 // the restart-and-install step — this is the folder the settings "Open folder"

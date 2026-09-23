@@ -6,7 +6,7 @@
   "main": "main.js",
   "author": "richa <richa@localhost>",
   "license": "MIT",
-  "homepage": "https://github.com/RichardPersaud/MangaNinja",
+  "homepage": "https://github.com/RichardPersaud/manga-browser",
   "scripts": {
     "start": "electron .",
     "dist": "electron-builder --win nsis",
@@ -19,7 +19,7 @@
     "publish": {
       "provider": "github",
       "owner": "RichardPersaud",
-      "repo": "MangaNinja"
+      "repo": "manga-browser"
     },
     "files": [
       "main.js",
