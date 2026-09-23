@@ -213,16 +213,68 @@ function mangaCard(m, extra) {
   meta.appendChild(t);
   const sub = document.createElement('div');
   sub.className = 'sub';
-  sub.textContent = extra || m.status || '';
+  // sub line: status as a small badge (or the Latest tab's "2h ago")
+  const renderSub = () => {
+    sub.textContent = '';
+    if (extra) {
+      const txt = document.createElement('span');
+      txt.textContent = extra;
+      sub.appendChild(txt);
+    } else if (m.status) {
+      const b = document.createElement('span');
+      b.className = `status-badge ${m.status} small`;
+      b.textContent = STATUS_LABELS[m.status] || m.status;
+      sub.appendChild(b);
+    }
+  };
+  renderSub();
   meta.appendChild(sub);
   card.appendChild(meta);
+  // chapter count: pill badge over the poster's top-left corner
+  let chBadge = null;
+  const ensureChBadge = (n) => {
+    if (!chBadge) {
+      chBadge = document.createElement('span');
+      chBadge.className = 'chcount';
+      card.appendChild(chBadge);
+    }
+    chBadge.textContent = `${n} ch`;
+  };
+  if (m.lastChapter) ensureChBadge(m.lastChapter);
+  // lazy count fill for cards that had no lastChapter from the list API
+  card._applyChapters = (n) => {
+    if (!n || extra) return;
+    m.lastChapter = String(n);
+    ensureChBadge(String(n));
+  };
   return card;
 }
 function grid(items, mkExtra) {
   const g = document.createElement('div');
   g.className = 'grid';
-  for (const it of items) g.appendChild(mangaCard(it, mkExtra && mkExtra(it)));
+  const cards = [];
+  for (const it of items) {
+    const c = mangaCard(it, mkExtra && mkExtra(it));
+    cards.push(c);
+    g.appendChild(c);
+  }
+  fillChapterCounts(cards, items);
   return g;
+}
+// counts for cards the list API left blank: one tiny feed query at a time
+// (server caches each for an hour, so revisits are instant)
+function fillChapterCounts(cards, items) {
+  let i = 0;
+  const next = () => {
+    while (i < items.length && items[i].lastChapter) i++;
+    if (i >= items.length) return;
+    const pos = i++;
+    api(`/api/manga/${items[pos].id}/chapters-count`)
+      .then(({ count }) => { if (cards[pos]) cards[pos]._applyChapters(count); })
+      .catch(() => {})
+      .finally(next);
+  };
+  next();
 }
 
 // ---------- Library ----------

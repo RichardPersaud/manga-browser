@@ -280,6 +280,20 @@ async function mangaFeed(id, { lang = 'en', limit = 500, offset = 0 } = {}) {
   return out;
 }
 
+// chapter count for one manga (EN feed total via a tiny limit=1 query;
+// cached an hour — grid cards lazy-fill these one at a time)
+async function chapterCount(id) {
+  const cached = cacheGet('chcount', id, 60 * 60 * 1000);
+  if (cached !== undefined) return cached;
+  const j = await req(`/manga/${id}/feed`, {
+    'translatedLanguage[]': ['en'],
+    limit: '1',
+  });
+  const out = typeof j.total === 'number' ? j.total : null;
+  cachePut('chcount', id, out);
+  return out;
+}
+
 // global latest-updates feed: chapters across all manga, newest first.
 // The tip of the feed is flooded with official-publisher chapters (externalUrl,
 // pages=0 — sometimes hundreds, some scheduled with far-future publishAt), so
@@ -345,6 +359,7 @@ module.exports = {
   listManga,
   manga,
   statistics,
+  chapterCount,
   mangaFeed,
   latestChapters,
   atHome,

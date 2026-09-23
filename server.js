@@ -304,6 +304,14 @@ async function route(req, res) {
     }
   }
 
+  if ((m = p.match(/^\/api\/manga\/([0-9a-f-]{36})\/chapters-count$/i))) {
+    try {
+      return sendJson(res, 200, { count: await md.chapterCount(m[1]) });
+    } catch (e) {
+      return sendJson(res, 502, { error: String(e.message || e) });
+    }
+  }
+
   if (p === '/api/latest') {
     try {
       const chapters = await md.latestChapters({ limit: Math.min(parseInt(q.get('limit') || '30', 10) || 30, 60) });
